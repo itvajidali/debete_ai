@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Message } from '@/lib/types';
 import ReactMarkdown from 'react-markdown';
@@ -14,20 +14,18 @@ interface ChatBubbleProps {
 export function ChatBubble({ message, preferredVoice }: ChatBubbleProps) {
     const isProponent = message.role === 'proponent';
     const [isPlaying, setIsPlaying] = useState(false);
-    const [speech, setSpeech] = useState<SpeechSynthesisUtterance | null>(null);
+    const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
 
     // State for Highlighting
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [spokenText, setSpokenText] = useState("");
 
     useEffect(() => {
-        // Cleanup speech on unmount
+        // Cleanup speech on unmount only
         return () => {
-            if (speech) {
-                window.speechSynthesis.cancel();
-            }
+            window.speechSynthesis.cancel();
         };
-    }, [speech]);
+    }, []);
 
     useEffect(() => {
         if (!isPlaying) setHighlightIndex(-1);
@@ -41,24 +39,16 @@ export function ChatBubble({ message, preferredVoice }: ChatBubbleProps) {
                 audio.pause();
                 audio.currentTime = 0;
             }
-            if (speech) window.speechSynthesis.cancel();
+            window.speechSynthesis.cancel();
 
             setIsPlaying(false);
             setHighlightIndex(-1);
             return;
         }
 
-        setIsPlaying(true);
         setSpokenText(message.content);
 
         // 1. Try browser TTS first (preferred for highlighting support)
-        // Note: Edge TTS (Server) doesn't support word boundary events easily via simple MP3.
-        // So given the user wants highlighting, we MUST use Browser TTS or a more complex player.
-        // Let's stick to Browser TTS for now as it supports onboundary.
-
-        // If user REALLY wants the high quality voice, we lose highlighting.
-        // But let's try to support highlighting on browser voice first.
-
         const utterance = new SpeechSynthesisUtterance(message.content);
         utterance.lang = 'hi-IN';
         utterance.rate = 1.0;
@@ -91,12 +81,27 @@ export function ChatBubble({ message, preferredVoice }: ChatBubbleProps) {
         };
 
         utterance.onerror = (e) => {
-            console.error("TTS Error", e);
+            // "interrupted" and "canceled" are expected when we manually stop speech
+            if (e.error === 'interrupted' || e.error === 'canceled') {
+                setIsPlaying(false);
+                setHighlightIndex(-1);
+                return;
+            }
+            console.error("TTS Error:", e.error);
             setIsPlaying(false);
+            setHighlightIndex(-1);
         };
 
-        setSpeech(utterance);
-        window.speechSynthesis.speak(utterance);
+        speechRef.current = utterance;
+
+        // Ensure we cancel any previous speech before starting new
+        window.speechSynthesis.cancel();
+
+        // Small delay to ensure cancel completes before speak
+        setTimeout(() => {
+            setIsPlaying(true);
+            window.speechSynthesis.speak(utterance);
+        }, 50);
     };
 
     // Helper to render highlighted text
